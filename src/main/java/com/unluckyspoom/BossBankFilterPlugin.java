@@ -1,13 +1,7 @@
 package com.unluckyspoom;
 
 import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.Reader;
-import java.io.Writer;
-import java.lang.reflect.Type;
-import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -15,7 +9,6 @@ import java.util.Set;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
@@ -28,20 +21,29 @@ import net.runelite.client.plugins.banktags.TagManager;
 import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.Filepath;
 import net.runelite.client.util.ImageUtil;
 
 @Slf4j
 @PluginDescriptor(
 		name = "Boss Bank Filter",
 		description = "Remembers loot by source and filters your bank to items from the bosses you pick",
-		tags = {"loot", "bank", "filter", "tracker", "boss"}
+		tags = {"loot", "bank", "filter", "tracker", "boss"},
+		internalName = "boss-bank-filter"
 )
 public class BossBankFilterPlugin extends Plugin
 {
-	private static final File SAVE_FILE = new File(RuneLite.RUNELITE_DIR, "boss-bank-filter.json");
+	// Saved in .runelite/plugin-data/boss-bank-filter/loot.json
+	private static final String SAVE_FILE_NAME = "loot.json";
 
 	// The name our filter is registered under with Bank Tags
 	private static final String TAG_NAME = "bossbankfilter";
+
+	// What gets saved: source name -> (item id -> total quantity)
+	static class LootData
+	{
+		Map<String, Map<Integer, Integer>> sources = new HashMap<>();
+	}
 
 	@Inject
 	private ItemManager itemManager;
@@ -92,6 +94,7 @@ public class BossBankFilterPlugin extends Plugin
 		clearFilter();
 		clientToolbar.removeNavigation(navButton);
 		saveLoot();
+		lootBySource.clear();
 	}
 
 	@Subscribe
@@ -206,37 +209,53 @@ public class BossBankFilterPlugin extends Plugin
 		SwingUtilities.invokeLater(() -> panel.update(snapshot));
 	}
 
+	// The file we save to, inside this plugin's own RuneLite data folder
+	private Filepath saveFile() throws Exception
+	{
+		Filepath dir = getPluginDirectory();
+		if (!dir.exists())
+		{
+			dir.createDirectories();
+		}
+		return dir.joinSegment(SAVE_FILE_NAME);
+	}
+
 	private void loadLoot()
 	{
-		if (!SAVE_FILE.exists())
+		try
 		{
-			return;
-		}
-
-		try (Reader reader = Files.newBufferedReader(SAVE_FILE.toPath()))
-		{
-			Type type = new TypeToken<Map<String, Map<Integer, Integer>>>() {}.getType();
-			Map<String, Map<Integer, Integer>> loaded = gson.fromJson(reader, type);
-			if (loaded != null)
+			Filepath file = saveFile();
+			if (!file.exists())
 			{
-				lootBySource.putAll(loaded);
+				return;
+			}
+
+			try (var reader = file.openBufferedReader())
+			{
+				LootData data = gson.fromJson(reader, LootData.class);
+				if (data != null && data.sources != null)
+				{
+					lootBySource.putAll(data.sources);
+				}
 			}
 		}
 		catch (Exception e)
 		{
-			log.warn("Could not load loot file", e);
+			log.warn("Could not load saved loot", e);
 		}
 	}
 
 	private void saveLoot()
 	{
-		try (Writer writer = Files.newBufferedWriter(SAVE_FILE.toPath()))
+		try
 		{
-			gson.toJson(lootBySource, writer);
+			LootData data = new LootData();
+			data.sources.putAll(lootBySource);
+			saveFile().write(gson.toJson(data));
 		}
 		catch (Exception e)
 		{
-			log.warn("Could not save loot file", e);
+			log.warn("Could not save loot", e);
 		}
 	}
 }
